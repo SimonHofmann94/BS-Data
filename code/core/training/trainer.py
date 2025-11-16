@@ -319,14 +319,22 @@ class Trainer:
         all_logits = np.vstack(all_logits)
         all_targets = np.vstack(all_targets)
         
-        # Convert to probabilities and compute metrics with fixed threshold
-        probabilities = 1 / (1 + np.exp(-all_logits))  # Sigmoid
+        # For single-label classification: use softmax + argmax instead of sigmoid
+        # Convert logits to probabilities
+        exp_logits = np.exp(all_logits - np.max(all_logits, axis=1, keepdims=True))
+        probabilities = exp_logits / np.sum(exp_logits, axis=1, keepdims=True)  # Softmax
+        
+        # Convert to one-hot predictions (argmax for single-label)
+        predicted_classes = np.argmax(probabilities, axis=1)
+        binary_predictions = np.zeros_like(probabilities)
+        binary_predictions[np.arange(len(predicted_classes)), predicted_classes] = 1
+        
         metrics = compute_metrics(
-            probabilities,
+            binary_predictions,  # Already binary, no threshold needed
             all_targets,
             threshold=threshold,
             class_names=self.class_names,
-            per_class_thresholds=None  # No threshold optimization
+            per_class_thresholds=None
         )
         
         avg_loss = total_loss / num_batches
@@ -374,16 +382,22 @@ class Trainer:
         all_logits = np.vstack(all_logits)
         all_targets = np.vstack(all_targets)
         
-        # Convert to probabilities
-        probabilities = 1 / (1 + np.exp(-all_logits))
+        # For single-label classification: use softmax + argmax
+        exp_logits = np.exp(all_logits - np.max(all_logits, axis=1, keepdims=True))
+        probabilities = exp_logits / np.sum(exp_logits, axis=1, keepdims=True)  # Softmax
         
-        # Compute metrics with fixed threshold
+        # Convert to one-hot predictions (argmax for single-label)
+        predicted_classes = np.argmax(probabilities, axis=1)
+        binary_predictions = np.zeros_like(probabilities)
+        binary_predictions[np.arange(len(predicted_classes)), predicted_classes] = 1
+        
+        # Compute metrics with binary predictions
         metrics = compute_metrics(
-            probabilities,
+            binary_predictions,
             all_targets,
             threshold=threshold,
             class_names=self.class_names,
-            per_class_thresholds=None  # No per-class optimization
+            per_class_thresholds=None
         )
         
         logger.info(
