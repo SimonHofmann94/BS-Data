@@ -106,6 +106,7 @@ def _register_default_losses() -> None:
     """Register default loss functions."""
     from .focal_loss import FocalLoss
     from .bce_loss import BCEWithLogitsLossWrapper
+    from .ce_loss import CrossEntropyLossWrapper
     
     registry = _default_registry
     
@@ -119,4 +120,10 @@ def _register_default_losses() -> None:
         "bce_with_logits",
         BCEWithLogitsLossWrapper,
         description="Binary Cross-Entropy with Logits"
+    )
+    
+    registry.register(
+        "cross_entropy",
+        CrossEntropyLossWrapper,
+        description="Cross-Entropy Loss for single-label classification"
     )

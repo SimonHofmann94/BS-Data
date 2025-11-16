@@ -325,25 +325,38 @@ def build_loss(cfg: DictConfig) -> torch.nn.Module:
     logger.info(f"Loss: {cfg.loss.type}")
     logger.info(f"Available losses: {list(loss_registry.list_losses().keys())}")
     
-    # Convert alpha from OmegaConf to native Python type
-    alpha = cfg.loss.alpha
-    if isinstance(alpha, (list, tuple)) or OmegaConf.is_list(alpha):
-        alpha = list(alpha)  # Convert OmegaConf ListConfig to Python list
-        logger.info(f"Converted alpha from config: {alpha}")
-    
-    # Build loss parameters
+    # Build loss parameters based on loss type
     loss_params = {
         "num_classes": cfg.data.num_classes,
-        "alpha": alpha,  # Now properly converted
-        "gamma": cfg.loss.gamma,
         "reduction": cfg.loss.reduction
     }
     
-    # Add optional Class-Balanced Loss parameters
-    if hasattr(cfg.loss, 'use_effective_num'):
-        loss_params['use_effective_num'] = cfg.loss.use_effective_num
-    if hasattr(cfg.loss, 'beta'):
-        loss_params['beta'] = cfg.loss.beta
+    # Add type-specific parameters
+    if cfg.loss.type == "focal_loss":
+        # Convert alpha from OmegaConf to native Python type
+        alpha = cfg.loss.alpha
+        if isinstance(alpha, (list, tuple)) or OmegaConf.is_list(alpha):
+            alpha = list(alpha)  # Convert OmegaConf ListConfig to Python list
+            logger.info(f"Converted alpha from config: {alpha}")
+        
+        loss_params["alpha"] = alpha
+        loss_params["gamma"] = cfg.loss.gamma
+        
+        # Add optional Class-Balanced Loss parameters
+        if hasattr(cfg.loss, 'use_effective_num'):
+            loss_params['use_effective_num'] = cfg.loss.use_effective_num
+        if hasattr(cfg.loss, 'beta'):
+            loss_params['beta'] = cfg.loss.beta
+            
+    elif cfg.loss.type == "cross_entropy":
+        # CrossEntropy-specific parameters
+        if hasattr(cfg.loss, 'weight') and cfg.loss.weight is not None:
+            loss_params['weight'] = cfg.loss.weight
+    
+    elif cfg.loss.type == "bce_with_logits":
+        # BCE-specific parameters
+        if hasattr(cfg.loss, 'pos_weight') and cfg.loss.pos_weight is not None:
+            loss_params['pos_weight'] = cfg.loss.pos_weight
     
     loss_fn = loss_registry.get(cfg.loss.type, **loss_params)
     

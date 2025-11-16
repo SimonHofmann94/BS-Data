@@ -1,7 +1,7 @@
 """
-Dataset implementation for Severstal full image classification.
+Dataset implementation for NEU Surface Defect Database.
 
-Loads full 256x1600 images while maintaining original aspect ratio.
+Loads 200x200 grayscale images for single-label classification.
 """
 
 import os
@@ -18,31 +18,35 @@ logger = logging.getLogger(__name__)
 
 class SeverstalFullImageDataset(Dataset):
     """
-    Dataset for full Severstal images with multi-label classification.
+    Dataset for NEU Surface Defect Database with single-label classification.
     
-    Loads entire images (256x1600) without resizing or cropping.
-    Supports stratified train/val/test splits.
+    Loads 200x200 images. Class is determined from filename.
     
-    5-Class Setup:
-        - Index 0: no_defect (explicit class for defect-free images)
-        - Index 1-4: defect_1, defect_2, defect_3, defect_4
+    6-Class Setup (single-label):
+        - Index 0: crazing
+        - Index 1: inclusion
+        - Index 2: patches
+        - Index 3: pitted_surface
+        - Index 4: rolled-in_scale
+        - Index 5: scratches
     
     Args:
         img_dir: Directory containing images
-        ann_dir: Directory containing annotations
+        ann_dir: Directory containing annotations (NOT USED for NEU)
         image_names: List of image filenames to load
         transform: Torchvision transforms
-        num_classes: Number of classes (5: no_defect + 4 defect types)
+        num_classes: Number of classes (6 defect types)
     """
     
-    NO_DEFECT_IDX = 0
-    DEFECT_CLASS_TO_IDX = {
-        "defect_1": 1,
-        "defect_2": 2,
-        "defect_3": 3,
-        "defect_4": 4,
+    CLASS_TO_IDX = {
+        "crazing": 0,
+        "inclusion": 1,
+        "patches": 2,
+        "pitted_surface": 3,
+        "rolled-in_scale": 4,
+        "scratches": 5,
     }
-    NUM_CLASSES = 5
+    NUM_CLASSES = 6
     
     def __init__(
         self,
@@ -50,11 +54,11 @@ class SeverstalFullImageDataset(Dataset):
         ann_dir: str,
         image_names: list,
         transform: Optional = None,
-        num_classes: int = 5,
+        num_classes: int = 6,
         verbose: bool = False
     ):
         self.img_dir = img_dir
-        self.ann_dir = ann_dir
+        self.ann_dir = ann_dir  # Not used for NEU dataset
         self.image_names = image_names
         self.transform = transform
         self.num_classes = num_classes
@@ -90,54 +94,25 @@ class SeverstalFullImageDataset(Dataset):
     
     def _load_label(self, img_name: str) -> Optional[np.ndarray]:
         """
-        Load label for an image from annotation file.
+        Load label for an image from filename.
         
-        Returns a 5-element binary vector:
-            [no_defect, defect_1, defect_2, defect_3, defect_4]
+        Returns a 6-element one-hot vector for single-label classification.
+        Class is extracted from the filename prefix (e.g., 'crazing_49.jpg' -> crazing)
         
-        Logic:
-            - If annotation has defect objects: set corresponding defect indices to 1, no_defect to 0
-            - If annotation has no defect objects: set no_defect to 1, all defect indices to 0
-            - If annotation file is missing: treat as no-defect (no_defect=1)
+        Returns:
+            One-hot encoded label vector
         """
-        base_name_no_ext = os.path.splitext(img_name)[0]
-        
-        # Try different annotation filename formats
-        ann_path_variants = [
-            os.path.join(self.ann_dir, f"{img_name}.json"),
-            os.path.join(self.ann_dir, f"{base_name_no_ext}.json")
-        ]
-        
         label = np.zeros(self.num_classes, dtype=np.float32)
-        has_defects = False
         
-        for ann_path in ann_path_variants:
-            if os.path.exists(ann_path):
-                try:
-                    with open(ann_path, 'r') as f:
-                        annotation = json.load(f)
-                    
-                    # Extract defect labels
-                    if "objects" in annotation and annotation["objects"]:
-                        for obj in annotation["objects"]:
-                            class_title = obj.get("classTitle")
-                            if class_title in self.DEFECT_CLASS_TO_IDX:
-                                class_idx = self.DEFECT_CLASS_TO_IDX[class_title]
-                                label[class_idx] = 1.0
-                                has_defects = True
-                    
-                    # Set no_defect flag
-                    if not has_defects:
-                        label[self.NO_DEFECT_IDX] = 1.0
-                    
-                    return label
-                    
-                except Exception as e:
-                    logger.warning(f"Error loading annotation {ann_path}: {e}")
-                    continue
+        # Extract class from filename
+        # Format: classname_number.jpg (e.g., 'crazing_49.jpg', 'pitted_surface_123.jpg')
+        for class_name, class_idx in self.CLASS_TO_IDX.items():
+            if img_name.startswith(class_name):
+                label[class_idx] = 1.0
+                return label
         
-        # If no annotation found, treat as no-defect image
-        label[self.NO_DEFECT_IDX] = 1.0
+        # If no class matched, log warning
+        logger.warning(f"Could not determine class for image: {img_name}")
         return label
     
     def __len__(self) -> int:
@@ -176,8 +151,8 @@ class SeverstalFullImageDataset(Dataset):
             logger.error(
                 f"Error loading sample {idx}: {sample['image_name']} - {e}"
             )
-            # Return dummy tensors
-            return torch.zeros(3, 256, 1600), torch.zeros(self.num_classes)
+            # Return dummy tensors (200x200 for NEU dataset)
+            return torch.zeros(3, 200, 200), torch.zeros(self.num_classes)
 
 
 if __name__ == "__main__":
