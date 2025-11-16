@@ -71,7 +71,15 @@ class Trainer:
         self.test_loader = test_loader
         self.optimizer = optimizer
         self.scheduler = scheduler
-        self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        if device:
+            self.device = device
+        else:
+            if torch.cuda.is_available():
+                self.device = torch.device("cuda")
+            elif torch.backends.mps.is_available():
+                self.device = torch.device("mps")
+            else:
+                self.device = torch.device("cpu")
         self.class_names = class_names or [f"class_{i}" for i in range(4)]
         self.config = config  # Store config for later saving
         self.split_info = split_info  # Store split statistics
