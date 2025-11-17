@@ -470,6 +470,30 @@ def main(cfg: DictConfig) -> None:
     logger.info("TRAINING COMPLETED SUCCESSFULLY")
     logger.info("="*70)
     logger.info(f"Experiment directory: {trainer.experiment_dir}")
+    
+    # Generate visualization plot
+    logger.info("\n" + "="*70)
+    logger.info("GENERATING VISUALIZATION")
+    logger.info("="*70)
+    try:
+        from experiments.plot_training_results import plot_training_results
+        
+        results_file = Path(trainer.experiment_dir) / "results.json"
+        viz_file = Path(trainer.experiment_dir) / "training_visualization.png"
+        
+        if results_file.exists():
+            import json
+            with open(results_file, 'r') as f:
+                results_data = json.load(f)
+            
+            plot_training_results(results_data, save_path=str(viz_file))
+            logger.info(f"✅ Visualization saved to: {viz_file}")
+        else:
+            logger.warning(f"Results file not found: {results_file}")
+    except Exception as e:
+        logger.exception("Failed to generate visualization")
+        logger.info("You can manually generate it with:")
+        logger.info(f"  ./venv/bin/python3 code/experiments/plot_training_results.py {results_file}")
 
 
 if __name__ == "__main__":

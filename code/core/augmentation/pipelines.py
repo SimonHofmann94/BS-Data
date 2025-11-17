@@ -52,6 +52,12 @@ class AugmentationPipeline:
         
         logger.info("Building augmentation pipeline...")
         
+        # Always add Resize first to ensure consistent dimensions
+        self.transform_list.append(
+            transforms.Resize(self.image_size)
+        )
+        logger.debug(f"Added: Resize to {self.image_size}")
+        
         # Add augmentations based on config
         for aug_name, aug_config in self.augmentations.items():
             if aug_config is None or (isinstance(aug_config, bool) and not aug_config):

@@ -1,8 +1,46 @@
 {
-  "split_name": "stratified_70_15_15",
-  "random_state": 42,
-  "train_size": 8797,
-  "val_size": 1885,
-  "test_size": 1886,
-  "total_size": 12568
+  "dataset": "Ball Screw Drive Surface Defect Dataset",
+  "total_images": 21835,
+  "num_classes": 2,
+  "classes": [
+    "no_defect",
+    "defect"
+  ],
+  "class_names": [
+    "no_defect",
+    "defect"
+  ],
+  "image_size": [
+    150,
+    150
+  ],
+  "split_ratios": {
+    "train": 0.7,
+    "val": 0.15,
+    "test": 0.15
+  },
+  "split_sizes": {
+    "train": 15283,
+    "val": 3275,
+    "test": 3277
+  },
+  "class_distribution": {
+    "train": {
+      "no_defect": 7752,
+      "defect": 7531
+    },
+    "val": {
+      "defect": 1614,
+      "no_defect": 1661
+    },
+    "test": {
+      "defect": 1615,
+      "no_defect": 1662
+    },
+    "total": {
+      "no_defect": 11075,
+      "defect": 10760
+    }
+  },
+  "seed": 42
 }

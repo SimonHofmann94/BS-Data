@@ -10,27 +10,27 @@ defaults:
 # Model configuration
 model:
   name: "convnext_tiny"  # Using base ConvNext (no CBAM) for faster training on M2
-  num_classes: 6  # NEU dataset: 6 defect types
+  num_classes: 2  # Ball Screw Drive: binary classification (defect/no_defect)
   pretrained: true  # Use pretrained - much faster convergence
   cbam_stages: [3, 4]  # Ignored for convnext_tiny
 
 # Loss function configuration
 loss:
-  type: "cross_entropy"  # Single-label classification for NEU dataset
+  type: "cross_entropy"  # Binary classification for Ball Screw Drive dataset
   weight: null  # Set to null for uniform weighting (balanced dataset)
   reduction: "mean"
 
 # Data configuration
 data:
   img_dir: "data/images"
-  ann_dir: "data/annotations"  # Not used for NEU dataset
+  ann_dir: "data/annotations"  # Not used for Ball Screw Drive dataset
   splits_dir: "data/splits"  # Directory for saved train/val/test splits
-  batch_size: 32  # Balanced for M2 8GB
+  batch_size: 64  # Increased from 32 - M2 can handle this with 150x150 images
   num_workers: 0  # 0 for MPS to avoid multiprocessing overhead
   pin_memory: false  # Not supported on MPS
-  image_size: [200, 200]  # NEU dataset: 200x200 images
-  num_classes: 6  # NEU: 6 defect types
-  class_names: ["crazing", "inclusion", "patches", "pitted_surface", "rolled-in_scale", "scratches"]
+  image_size: [150, 150]  # Ball Screw Drive dataset: 150x150 images
+  num_classes: 2  # Ball Screw Drive: binary classification
+  class_names: ["no_defect", "defect"]
   
   # Split strategy: use pre-saved splits from setup script
   split_strategy: "stratified_70_15_15"
@@ -39,11 +39,11 @@ data:
 # Augmentation configuration
 augmentation:
   horizontal_flip: 0.5
-  vertical_flip: 0.5
-  rotation: 15  # Enable rotation to increase variety
+  vertical_flip: 0.3  # Reduced from 0.5 - less augmentation = faster
+  rotation: 10  # Reduced from 15 - less rotation = faster
   brightness_contrast:
-    brightness: 0.3  # Increased augmentation strength
-    contrast: 0.3
+    brightness: 0.2  # Reduced from 0.3 - less augmentation = faster
+    contrast: 0.2
   
   # Defect Blackout Augmentation (disabled for NEU dataset)
   defect_blackout:
@@ -54,8 +54,8 @@ training:
   num_epochs: 50  # Reduced from 100 - balanced dataset converges faster
   learning_rate: 0.001
   weight_decay: 0.001  # Increased from 0.0001 - stronger L2 regularization
-  warmup_epochs: 3  # Reduced from 5
-  early_stopping_patience: 8  # Reduced from 10 - stop sooner if overfitting
+  warmup_epochs: 2  # Reduced from 3 - faster warmup
+  early_stopping_patience: 5  # Reduced from 8 - stop earlier
   early_stopping_metric: "f1_macro"
   log_interval: 5  # More frequent logging to see progress
   threshold: 0.5

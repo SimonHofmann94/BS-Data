@@ -420,7 +420,7 @@ class Trainer:
     ) -> None:
         """Log epoch metrics."""
         logger.info(
-            f"\nEpoch {epoch} Summary:"
+            f"Epoch {epoch} Summary:"
             f" Train Loss: {train_loss:.4f},"
             f" Val Loss: {val_loss:.4f},"
             f" F1 (macro): {val_metrics['f1_macro']:.4f}"

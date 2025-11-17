@@ -1,7 +1,7 @@
 """
-Dataset implementation for NEU Surface Defect Database.
+Dataset implementation for Ball Screw Drive Surface Defect Dataset.
 
-Loads 200x200 grayscale images for single-label classification.
+Loads 150x150 RGB images for binary classification.
 """
 
 import os
@@ -18,35 +18,27 @@ logger = logging.getLogger(__name__)
 
 class SeverstalFullImageDataset(Dataset):
     """
-    Dataset for NEU Surface Defect Database with single-label classification.
+    Dataset for Ball Screw Drive Surface Defect Dataset with binary classification.
     
-    Loads 200x200 images. Class is determined from filename.
+    Loads 150x150 images. Class is determined from filename prefix.
     
-    6-Class Setup (single-label):
-        - Index 0: crazing
-        - Index 1: inclusion
-        - Index 2: patches
-        - Index 3: pitted_surface
-        - Index 4: rolled-in_scale
-        - Index 5: scratches
+    Binary Classification:
+        - Index 0: no_defect (filename starts with 'N ')
+        - Index 1: defect (filename starts with 'P ' - pitting)
     
     Args:
         img_dir: Directory containing images
-        ann_dir: Directory containing annotations (NOT USED for NEU)
+        ann_dir: Directory containing annotations (NOT USED)
         image_names: List of image filenames to load
         transform: Torchvision transforms
-        num_classes: Number of classes (6 defect types)
+        num_classes: Number of classes (2: no_defect/defect)
     """
     
     CLASS_TO_IDX = {
-        "crazing": 0,
-        "inclusion": 1,
-        "patches": 2,
-        "pitted_surface": 3,
-        "rolled-in_scale": 4,
-        "scratches": 5,
+        "no_defect": 0,
+        "defect": 1,
     }
-    NUM_CLASSES = 6
+    NUM_CLASSES = 2
     
     def __init__(
         self,
@@ -96,20 +88,23 @@ class SeverstalFullImageDataset(Dataset):
         """
         Load label for an image from filename.
         
-        Returns a 6-element one-hot vector for single-label classification.
-        Class is extracted from the filename prefix (e.g., 'crazing_49.jpg' -> crazing)
+        Returns a 2-element one-hot vector for binary classification.
+        Class is extracted from the filename prefix:
+        - 'N ' prefix -> no_defect (index 0)
+        - 'P ' prefix -> defect/pitting (index 1)
         
         Returns:
             One-hot encoded label vector
         """
         label = np.zeros(self.num_classes, dtype=np.float32)
         
-        # Extract class from filename
-        # Format: classname_number.jpg (e.g., 'crazing_49.jpg', 'pitted_surface_123.jpg')
-        for class_name, class_idx in self.CLASS_TO_IDX.items():
-            if img_name.startswith(class_name):
-                label[class_idx] = 1.0
-                return label
+        # Extract class from filename prefix
+        if img_name.startswith('N '):
+            label[0] = 1.0  # no_defect
+            return label
+        elif img_name.startswith('P '):
+            label[1] = 1.0  # defect (pitting)
+            return label
         
         # If no class matched, log warning
         logger.warning(f"Could not determine class for image: {img_name}")
@@ -151,8 +146,8 @@ class SeverstalFullImageDataset(Dataset):
             logger.error(
                 f"Error loading sample {idx}: {sample['image_name']} - {e}"
             )
-            # Return dummy tensors (200x200 for NEU dataset)
-            return torch.zeros(3, 200, 200), torch.zeros(self.num_classes)
+            # Return dummy tensors (150x150 for Ball Screw Drive dataset)
+            return torch.zeros(3, 150, 150), torch.zeros(self.num_classes)
 
 
 if __name__ == "__main__":
