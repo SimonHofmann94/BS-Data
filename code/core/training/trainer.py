@@ -45,7 +45,6 @@ class Trainer:
         optimizer: Optimizer (e.g., Adam, SGD)
         scheduler: Learning rate scheduler
         device: torch device
-        experiment_dir: Directory to save experiment results
         class_names: Names of classes for logging
     """
     
@@ -59,7 +58,6 @@ class Trainer:
         optimizer: optim.Optimizer,
         scheduler: object = None,
         device: torch.device = None,
-        experiment_dir: str = "experiments/results",
         class_names: List[str] = None,
         config: Optional[Dict[str, Any]] = None,
         split_info: Optional[Dict[str, Any]] = None,
@@ -84,11 +82,9 @@ class Trainer:
         self.config = config  # Store config for later saving
         self.split_info = split_info  # Store split statistics
         
-        # Setup experiment directory
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.experiment_name = f"experiment_{timestamp}"
-        self.experiment_dir = Path(experiment_dir) / self.experiment_name
-        self.experiment_dir.mkdir(parents=True, exist_ok=True)
+        # Setup experiment directory to be the current working directory, managed by Hydra
+        self.experiment_dir = Path.cwd()
+        self.experiment_name = self.experiment_dir.name
         
         # Checkpoint directory
         self.checkpoint_dir = self.experiment_dir / "checkpoints"
@@ -144,14 +140,20 @@ class Trainer:
         
         # Setup learning rate scheduler with warmup
         if self.scheduler is None:
-            base_scheduler = CosineAnnealingLR(self.optimizer, T_max=num_epochs - warmup_epochs)
+            # Ensure T_max is at least 1 to prevent division by zero if num_epochs <= warmup_epochs
+            t_max = max(1, num_epochs - warmup_epochs)
+            base_scheduler = CosineAnnealingLR(self.optimizer, T_max=t_max)
+            
+            # Adjust milestones if warmup is longer than total epochs
+            milestone = min(warmup_epochs, num_epochs)
+            
             scheduler = torch.optim.lr_scheduler.SequentialLR(
                 self.optimizer,
                 schedulers=[
-                    LinearLR(self.optimizer, start_factor=0.1, total_iters=warmup_epochs),
+                    LinearLR(self.optimizer, start_factor=0.1, total_iters=milestone),
                     base_scheduler
                 ],
-                milestones=[warmup_epochs]
+                milestones=[milestone]
             )
         else:
             scheduler = self.scheduler

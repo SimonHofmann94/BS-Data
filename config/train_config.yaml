@@ -78,12 +78,14 @@ scheduler:
 # Experiment configuration
 experiment:
   name: null  # Will be generated from timestamp if null
-  seed: 42
+  seed: 42 # TODO: Change seed for different runs
   save_dir: "code/experiments/results"
 
 # Hydra specific config
 hydra:
   run:
-    dir: code/experiments/results/${now:%Y-%m-%d}/${now:%H-%M-%S}
+    # Use a simpler output directory structure that prioritizes the experiment name.
+    # This makes it easier for aggregation scripts to find the results.
+    dir: code/experiments/results/${experiment.name}_${now:%Y%m%d_%H%M%S}
   job:
     chdir: false

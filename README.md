@@ -26,6 +26,14 @@ python code/train.py
 python code/train.py data.batch_size=6 training.num_epochs=150
 ```
 
+## 🔍 Hyperparameter Sweeps & Resume
+
+Use the sweep script to execute all combinations of hyperparameters defined in the script.
+
+```bash
+./venv/bin/python code/experiments/run_hparam_sweep.py --help
+```
+
 ## ☁️ RunPod Setup
 
 See [GIT_LFS_SETUP.md](GIT_LFS_SETUP.md) for detailed GitHub/LFS setup instructions.

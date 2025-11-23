@@ -1,4 +1,5 @@
 # Main configuration file for Severstal Steel Defect Classification
+# TODO: is this file even used?
 defaults:
   - data: severstal
   - model: densenet121
@@ -16,7 +17,7 @@ paths:
   checkpoints_dir: "checkpoints"
 
 # Device settings
-device: "cuda"  # cuda, cpu, auto
+device: "mps"  # cuda, cpu, auto
 mixed_precision: true
 
 # Logging

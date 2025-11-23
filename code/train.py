@@ -437,7 +437,6 @@ def main(cfg: DictConfig) -> None:
     logger.info("="*60)
     
     project_root = Path(__file__).parent.parent
-    experiment_dir = project_root / cfg.experiment.save_dir
     
     # Convert OmegaConf to dict for JSON serialization
     config_dict = OmegaConf.to_container(cfg, resolve=True)
@@ -451,7 +450,6 @@ def main(cfg: DictConfig) -> None:
         optimizer=optimizer,
         scheduler=None,  # Will be created in train()
         device=device,
-        experiment_dir=str(experiment_dir),
         class_names=cfg.data.class_names,
         config=config_dict,  # Pass config for saving
         split_info=split_info  # Pass split statistics
@@ -500,6 +498,10 @@ if __name__ == "__main__":
     # Load config using Hydra
     config_dir = Path(__file__).parent.parent / "config"
     
-    with initialize_config_dir(version_base=None, config_dir=str(config_dir)):
-        cfg = compose(config_name="train_config")
-        main(cfg)
+    try:
+        with initialize_config_dir(version_base=None, config_dir=str(config_dir)):
+            cfg = compose(config_name="train_config")
+            main(cfg)
+    except Exception as e:
+        logger.exception("An error occurred during the training pipeline.")
+        sys.exit(1)
