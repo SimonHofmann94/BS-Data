@@ -1,0 +1,7 @@
+phase,lr,weight_decay,seed,metric_value,experiment_dir,metric_key_used
+grid,0.1,0.0001,42,0.9560302022909049,code/experiments/results/experiment_grid_lr0.1_wd0.0001_s42_20251127_060307,best_val_metrics.f1_macro
+grid,0.1,0.0001,43,0.9553722096780938,code/experiments/results/experiment_grid_lr0.1_wd0.0001_s43_20251127_062317,best_val_metrics.f1_macro
+grid,0.001,0.0001,42,0.9618231625575566,code/experiments/results/experiment_grid_lr0.001_wd0.0001_s42_20251127_064842,best_val_metrics.f1_macro
+grid,0.001,0.0001,43,0.9606022238819485,code/experiments/results/experiment_grid_lr0.001_wd0.0001_s43_20251127_080343,best_val_metrics.f1_macro
+grid,0.0005,0.0001,42,0.9575410372904836,code/experiments/results/experiment_grid_lr0.0005_wd0.0001_s42_20251127_090202,best_val_metrics.f1_macro
+grid,0.0005,0.0001,43,0.9578559902961075,code/experiments/results/experiment_grid_lr0.0005_wd0.0001_s43_20251127_100318,best_val_metrics.f1_macro
