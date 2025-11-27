@@ -14,6 +14,7 @@ import os
 import sys
 import logging
 from pathlib import Path
+from datetime import datetime
 
 import torch
 import numpy as np
@@ -36,6 +37,33 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+
+def prepare_experiment_directory(cfg: DictConfig, project_root: Path) -> Path:
+    """Create (or reuse) the folder that will store artifacts for this run."""
+    base_dir = Path(cfg.experiment.save_dir)
+    if not base_dir.is_absolute():
+        base_dir = project_root / base_dir
+    base_dir.mkdir(parents=True, exist_ok=True)
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    if cfg.experiment.name:
+        sanitized = "".join(
+            ch if ch.isalnum() or ch in ("-", "_", ".", "=") else "_"
+            for ch in str(cfg.experiment.name)
+        )
+        dir_name = f"experiment_{sanitized}_{timestamp}"
+    else:
+        dir_name = f"experiment_{timestamp}"
+
+    experiment_dir = base_dir / dir_name
+    experiment_dir.mkdir(parents=True, exist_ok=True)
+
+    # Persist location inside the config for downstream scripts (predict, analysis, etc.)
+    cfg.experiment.output_dir = str(experiment_dir)
+
+    logger.info(f"Artifacts will be stored in: {experiment_dir}")
+    return experiment_dir
 
 
 def set_seed(seed: int) -> None:
@@ -408,6 +436,7 @@ def main(cfg: DictConfig) -> None:
     logger.info("\n" + "="*70)
     logger.info("SEVERSTAL DEFECT CLASSIFICATION - TRAINING PIPELINE")
     logger.info("="*70)
+    project_root = Path(__file__).parent.parent
     
     # Print configuration
     logger.info("\nConfiguration:")
@@ -431,12 +460,19 @@ def main(cfg: DictConfig) -> None:
     # Build optimizer
     optimizer = build_optimizer(cfg, model)
     
+    # Prepare experiment directory for artifacts (mirrors Hydra's run dir behavior)
+    experiment_dir = prepare_experiment_directory(cfg, project_root)
+
+    # Persist the resolved config alongside the run for reproducibility
+    config_snapshot_path = experiment_dir / "config.yaml"
+    with open(config_snapshot_path, "w") as f:
+        f.write(OmegaConf.to_yaml(cfg))
+    logger.info(f"Saved resolved config to {config_snapshot_path}")
+
     # Create trainer
     logger.info("\n" + "="*60)
     logger.info("Initializing Trainer")
     logger.info("="*60)
-    
-    project_root = Path(__file__).parent.parent
     
     # Convert OmegaConf to dict for JSON serialization
     config_dict = OmegaConf.to_container(cfg, resolve=True)
@@ -452,7 +488,8 @@ def main(cfg: DictConfig) -> None:
         device=device,
         class_names=cfg.data.class_names,
         config=config_dict,  # Pass config for saving
-        split_info=split_info  # Pass split statistics
+        split_info=split_info,  # Pass split statistics
+        experiment_dir=experiment_dir
     )
     
     # Train
@@ -500,7 +537,8 @@ if __name__ == "__main__":
     
     try:
         with initialize_config_dir(version_base=None, config_dir=str(config_dir)):
-            cfg = compose(config_name="train_config")
+            # Honor CLI overrides, e.g., "optimizer.lr=1e-4 experiment.name=my_run"
+            cfg = compose(config_name="train_config", overrides=sys.argv[1:])
             main(cfg)
     except Exception as e:
         logger.exception("An error occurred during the training pipeline.")

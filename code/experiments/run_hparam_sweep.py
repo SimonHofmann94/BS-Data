@@ -15,7 +15,7 @@ Usage:
     # Preview without running
     python code/experiments/run_hparam_sweep.py --dry-run
 
-Results saved to: code/experiments/results/hparam_summaries/
+Results saved under: code/experiments/results/hparam_summaries/<timestamped_sweep>/
 """
 from __future__ import annotations
 
@@ -28,17 +28,18 @@ from pathlib import Path
 from datetime import datetime
 from typing import List, Dict, Any
 import csv
+import re
 
 # ---------------------------------------------------------------------------
 # Configuration of sweep levels (adjust as needed)
 # ---------------------------------------------------------------------------
-LR_VALUES = [1e-4, 1e-5, 0]
-WD_VALUES = [1e-2, 1e-3, 1e-4, 1e-5]
-DEFAULT_SEEDS = [42, 43, 44, 45, 46]
+LR_VALUES = [1e-1, 1e-3, 5e-4]
+WD_VALUES = [1e-4]
+DEFAULT_SEEDS = [42, 43]
 
 RESULTS_ROOT = Path("code/experiments/results")
-SUMMARY_DIR = RESULTS_ROOT / "hparam_summaries"
-SUMMARY_DIR.mkdir(parents=True, exist_ok=True)
+SUMMARY_ROOT = RESULTS_ROOT / "hparam_summaries"
+SUMMARY_ROOT.mkdir(parents=True, exist_ok=True)
 
 # Potential metric keys to extract for convenience
 METRIC_CANDIDATES = [
@@ -48,6 +49,35 @@ METRIC_CANDIDATES = [
     "f1_macro",
     "best_f1_macro"
 ]
+
+
+def _slugify(text: str) -> str:
+    """Sanitize a string so it can be used in a folder name."""
+    slug = re.sub(r"[^A-Za-z0-9._-]+", "_", text)
+    return slug.strip("_") or "default"
+
+
+def _format_param_block(name: str, values: List[Any]) -> str:
+    if not values:
+        return name
+    str_values = "-".join(f"{v}" for v in values)
+    return _slugify(f"{name}_{str_values}")
+
+
+def create_summary_dir(lr_values: List[float], wd_values: List[float], seeds: List[int], *, tag: str | None = None) -> Path:
+    """Create a unique summary directory for the current sweep configuration."""
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    parts = [
+        _format_param_block("lr", lr_values),
+        _format_param_block("wd", wd_values),
+        _format_param_block("seeds", seeds)
+    ]
+    if tag:
+        parts.append(_slugify(tag))
+    descriptor = "__".join(parts)
+    summary_dir = SUMMARY_ROOT / f"sweep_{timestamp}__{descriptor}"
+    summary_dir.mkdir(parents=True, exist_ok=True)
+    return summary_dir
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -63,24 +93,33 @@ def find_latest_run_dir(base_dir: Path) -> Path | None:
     return latest_dir
 
 
-def _find_existing_run(base_dir: Path, experiment_name: str) -> Path | None:
-    """
-    Check if a directory with a results.json for this experiment already exists.
-    Since the folder name is now dynamic, we need to check the README inside.
+def _sanitize_for_dir_name(name: str) -> str:
+    """Match train.py's experiment name sanitization for directory names."""
+    return "".join(
+        ch if (ch.isalnum() or ch in ("-", "_", ".", "=")) else "_"
+        for ch in str(name)
+    )
+
+
+def find_latest_run_dir_for_experiment(base_dir: Path, experiment_name: str) -> Path | None:
+    """Find the most recent run directory for a specific experiment name.
+    Train script formats as: experiment_<sanitized_name>_<timestamp>
     """
     if not base_dir.exists():
         return None
-        
-    for run_dir in base_dir.iterdir():
-        if run_dir.is_dir():
-            readme_path = run_dir / "README.md"
-            if readme_path.exists():
-                with open(readme_path, 'r') as f:
-                    content = f.read()
-                if f"Experiment: {experiment_name}" in content:
-                    # Check if it actually finished
-                    if (run_dir / "results.json").exists():
-                        return run_dir
+    sanitized = _sanitize_for_dir_name(experiment_name)
+    prefix = f"experiment_{sanitized}_"
+    candidates = [d for d in base_dir.iterdir() if d.is_dir() and d.name.startswith(prefix)]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda d: d.stat().st_ctime)
+
+
+def _find_existing_run(base_dir: Path, experiment_name: str) -> Path | None:
+    """Return an existing completed run dir for this experiment if present."""
+    run_dir = find_latest_run_dir_for_experiment(base_dir, experiment_name)
+    if run_dir and (run_dir / "results.json").exists():
+        return run_dir
     return None
 
 
@@ -97,6 +136,9 @@ def run_training(experiment_name: str, lr: float, wd: float, seed: int, *, skip_
         sys.executable, "code/train.py",
         f"optimizer.lr={lr}",
         f"optimizer.weight_decay={wd}",
+        # Also set training.* in case the trainer reads from training section
+        f"training.learning_rate={lr}",
+        f"training.weight_decay={wd}",
         f"experiment.seed={seed}",
         f"experiment.name={experiment_name}",  # Pass name for logging and metadata
     ]
@@ -117,12 +159,12 @@ def run_training(experiment_name: str, lr: float, wd: float, seed: int, *, skip_
     print(f"\n[RUN] {' '.join(command)}")
     start_time = time.time()
     try:
-        # We can't know the exact directory name beforehand, so we find it after the run.
+        # Execute training; the script creates a directory: experiment_<name>_<ts>
         subprocess.run(command, check=True)
-        
-        # Find the directory that was just created
-        latest_run_dir = find_latest_run_dir(RESULTS_ROOT)
-        
+
+        # Find the directory that was just created for this experiment
+        latest_run_dir = find_latest_run_dir_for_experiment(RESULTS_ROOT, experiment_name)
+
         if latest_run_dir:
             print(f"✅ SUCCESS: Training for {experiment_name} completed.")
             print(f"   - Output directory: {latest_run_dir}")
@@ -156,20 +198,22 @@ This directory contains the results for a single training run with the following
         return None
 
 
-def extract_metric(results_json: Dict[str, Any]) -> float | None:
-    """Try extracting a macro F1 (or similar) metric from results.json."""
+def extract_metric(results_json: Dict[str, Any]) -> tuple[float | None, str | None]:
+    """Try extracting a macro F1 (or similar) metric from results.json.
+    Returns (value, key_path) where key_path may be nested like 'val.best_f1_macro'.
+    """
     # Direct level
     for key in METRIC_CANDIDATES:
         if key in results_json and isinstance(results_json[key], (int, float)):
-            return float(results_json[key])
+            return float(results_json[key]), key
 
     # Nested search (one level deep)
-    for k, v in results_json.items():
+    for parent, v in results_json.items():
         if isinstance(v, dict):
             for key in METRIC_CANDIDATES:
                 if key in v and isinstance(v[key], (int, float)):
-                    return float(v[key])
-    return None
+                    return float(v[key]), f"{parent}.{key}"
+    return None, None
 
 
 def summarize_run(run_dir: Path, lr: float, wd: float, seed: int, phase: str) -> Dict[str, Any]:
@@ -181,22 +225,22 @@ def summarize_run(run_dir: Path, lr: float, wd: float, seed: int, phase: str) ->
                 data = json.load(f)
         except Exception as e:
             print(f"[WARN] Failed reading {results_file}: {e}")
-    metric_val = extract_metric(data)
+    metric_val, metric_key = extract_metric(data)
     return {
         "phase": phase,
         "experiment_dir": str(run_dir),
         "lr": lr,
         "weight_decay": wd,
         "seed": seed,
-        "metric_key_used": next((k for k in METRIC_CANDIDATES if k in data), None),
+        "metric_key_used": metric_key,
         "metric_value": metric_val,
         "raw_results": data
     }
 
 
-def write_aggregate(summaries: List[Dict[str, Any]], phase: str, lr_values: List[float], wd_values: List[float]) -> None:
-    json_path = SUMMARY_DIR / f"{phase}_sweep_summary.json"
-    csv_path = SUMMARY_DIR / f"{phase}_sweep_summary.csv"
+def write_aggregate(summaries: List[Dict[str, Any]], phase: str, lr_values: List[float], wd_values: List[float], seeds: List[int], summary_dir: Path) -> None:
+    json_path = summary_dir / f"{phase}_sweep_summary.json"
+    csv_path = summary_dir / f"{phase}_sweep_summary.csv"
     with open(json_path, "w") as f:
         json.dump(summaries, f, indent=2)
     print(f"[SAVE] JSON summary written: {json_path} Total runs: {len(summaries)}")
@@ -211,7 +255,7 @@ def write_aggregate(summaries: List[Dict[str, Any]], phase: str, lr_values: List
     print(f"[SAVE] CSV summary written: {csv_path}")
     
     # Create README for summary directory
-    readme_path = SUMMARY_DIR / "README.md"
+    readme_path = summary_dir / "README.md"
     readme_content = f"""# Hyperparameter Sweep Summary
 
 ## Overview
@@ -220,7 +264,7 @@ This directory contains aggregated results from the hyperparameter grid search e
 ## Configuration
 - **Learning Rates**: {lr_values}
 - **Weight Decays**: {wd_values}
-- **Seeds per Configuration**: {DEFAULT_SEEDS}
+- **Seeds per Configuration**: {seeds}
 - **Total Runs**: {len(summaries)}
 
 ## Created
@@ -263,7 +307,7 @@ def aggregate_stats(summaries: List[Dict[str, Any]], param_name: str) -> Dict[st
 # Main grid search logic
 # ---------------------------------------------------------------------------
 
-def run_grid_search(seeds: List[int], skip_completed: bool, force_rerun: bool, dry_run: bool, quick_test: bool, lr_values: List[float], wd_values: List[float]) -> None:
+def run_grid_search(seeds: List[int], skip_completed: bool, force_rerun: bool, dry_run: bool, quick_test: bool, lr_values: List[float], wd_values: List[float], summary_dir: Path) -> None:
     """Full grid search: all LR × WD combinations."""
     summaries: List[Dict[str, Any]] = []
     total_runs = len(lr_values) * len(wd_values) * len(seeds)
@@ -313,18 +357,18 @@ def run_grid_search(seeds: List[int], skip_completed: bool, force_rerun: bool, d
                 
                 summaries.append(summarize_run(run_dir, lr=lr, wd=wd, seed=seed, phase="grid"))
     
-    write_aggregate(summaries, phase="grid", lr_values=lr_values, wd_values=wd_values)
+    write_aggregate(summaries, phase="grid", lr_values=lr_values, wd_values=wd_values, seeds=seeds, summary_dir=summary_dir)
     
     # Stats by LR
     lr_stats = aggregate_stats(summaries, param_name="lr")
-    lr_stats_path = SUMMARY_DIR / "grid_lr_stats.json"
+    lr_stats_path = summary_dir / "grid_lr_stats.json"
     with open(lr_stats_path, "w") as f:
         json.dump(lr_stats, f, indent=2)
     print(f"[SAVE] Per-LR stats: {lr_stats_path}")
     
     # Stats by WD
     wd_stats = aggregate_stats(summaries, param_name="weight_decay")
-    wd_stats_path = SUMMARY_DIR / "grid_wd_stats.json"
+    wd_stats_path = summary_dir / "grid_wd_stats.json"
     with open(wd_stats_path, "w") as f:
         json.dump(wd_stats, f, indent=2)
     print(f"[SAVE] Per-WD stats: {wd_stats_path}")
@@ -361,12 +405,24 @@ def main():
         lr_values = LR_VALUES
         wd_values = WD_VALUES
     
-    run_grid_search(seeds=seeds, skip_completed=args.skip_completed, force_rerun=args.force_rerun, dry_run=args.dry_run, quick_test=args.quick_test, lr_values=lr_values, wd_values=wd_values)
+    summary_dir = create_summary_dir(lr_values, wd_values, seeds, tag="quick-test" if args.quick_test else None)
+    print(f"Summaries will be stored in: {summary_dir}\n")
+    
+    run_grid_search(
+        seeds=seeds,
+        skip_completed=args.skip_completed,
+        force_rerun=args.force_rerun,
+        dry_run=args.dry_run,
+        quick_test=args.quick_test,
+        lr_values=lr_values,
+        wd_values=wd_values,
+        summary_dir=summary_dir
+    )
 
     print("\n" + "="*70)
     print("SWEEP COMPLETED")
     print("="*70)
-    print(f"Results saved to: {SUMMARY_DIR}")
+    print(f"Results saved to: {summary_dir}")
     print("="*70)
 
 

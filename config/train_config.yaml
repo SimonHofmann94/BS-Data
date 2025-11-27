@@ -80,6 +80,7 @@ experiment:
   name: null  # Will be generated from timestamp if null
   seed: 42 # TODO: Change seed for different runs
   save_dir: "code/experiments/results"
+  output_dir: null  # Populated at runtime for downstream scripts
 
 # Hydra specific config
 hydra:

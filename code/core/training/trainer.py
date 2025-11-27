@@ -61,6 +61,7 @@ class Trainer:
         class_names: List[str] = None,
         config: Optional[Dict[str, Any]] = None,
         split_info: Optional[Dict[str, Any]] = None,
+        experiment_dir: Optional[Path] = None,
     ):
         self.model = model
         self.loss_fn = loss_fn
@@ -82,8 +83,9 @@ class Trainer:
         self.config = config  # Store config for later saving
         self.split_info = split_info  # Store split statistics
         
-        # Setup experiment directory to be the current working directory, managed by Hydra
-        self.experiment_dir = Path.cwd()
+        # Setup experiment directory (defaults to current working directory when not provided)
+        self.experiment_dir = Path(experiment_dir) if experiment_dir else Path.cwd()
+        self.experiment_dir.mkdir(parents=True, exist_ok=True)
         self.experiment_name = self.experiment_dir.name
         
         # Checkpoint directory
