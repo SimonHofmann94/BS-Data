@@ -26,6 +26,7 @@ Results saved under: code/experiments/results/hparam_summaries/<timestamped_swee
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import subprocess
 import sys
@@ -34,14 +35,21 @@ from pathlib import Path
 from datetime import datetime
 from typing import List, Dict, Any
 import csv
+import random
 import re
 
 # ---------------------------------------------------------------------------
 # Configuration of sweep levels (adjust as needed)
 # ---------------------------------------------------------------------------
-LR_VALUES = [1e-1, 1e-3, 5e-4]
-WD_VALUES = [1e-4]
-DEFAULT_SEEDS = [42, 43]
+LR_VALUES = [0.001, 0.005, 0.01] # values of learning rates to try
+WD_VALUES = [0.001, 0.01, 0.1] # values of weight decay to try
+# DEFAULT_SEEDS = [42, 43, 44, 45, 46] # number of repetitions for each combination of parameters
+# DEFAULT_SEEDS = [47, 48, 49, 50, 51] # number of repetitions for each combination of parameters
+# DEFAULT_SEEDS = [52, 53, 54, 55, 56] # number of repetitions for each combination of parameters
+
+
+DEFAULT_SHUFFLE_SEED = 42
+DEFAULT_LOG_FILENAME = "sweep.log"
 
 RESULTS_ROOT = Path("code/experiments/results")
 SUMMARY_ROOT = RESULTS_ROOT / "hparam_summaries"
@@ -97,21 +105,27 @@ def create_summary_dir(
     seeds: List[int],
     *,
     tag: str | None = None,
-    reuse_existing: bool = True
-) -> Path:
-    """Create (or reuse) a summary directory for the current sweep configuration."""
+    reuse_existing: bool = True,
+    announce: bool = True
+) -> tuple[Path, bool]:
+    """Create (or reuse) a summary directory for the current sweep configuration.
+
+    Returns a tuple of (summary_dir_path, reused_existing_flag).
+    """
     descriptor = _build_summary_descriptor(lr_values, wd_values, seeds, tag)
     if reuse_existing:
         existing = _find_existing_summary_dir(descriptor)
         if existing:
-            print(f"[INFO] Reusing summary directory: {existing}")
-            return existing
+            if announce:
+                print(f"[INFO] Reusing summary directory: {existing}")
+            return existing, True
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     summary_dir = SUMMARY_ROOT / f"sweep_{timestamp}__{descriptor}"
     summary_dir.mkdir(parents=True, exist_ok=True)
-    print(f"[INFO] Created new summary directory: {summary_dir}")
-    return summary_dir
+    if announce:
+        print(f"[INFO] Created new summary directory: {summary_dir}")
+    return summary_dir, False
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -302,6 +316,19 @@ def merge_summaries(existing: List[Dict[str, Any]], new: List[Dict[str, Any]]) -
     return list(merged.values())
 
 
+def sort_summaries(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Return summaries ordered for easier inspection regardless of run order."""
+    return sorted(
+        records,
+        key=lambda r: (
+            r.get("phase") or "",
+            float(r.get("lr") or 0.0),
+            float(r.get("weight_decay") or 0.0),
+            int(r.get("seed") or 0)
+        ),
+    )
+
+
 def write_aggregate(summaries: List[Dict[str, Any]], phase: str, lr_values: List[float], wd_values: List[float], seeds: List[int], summary_dir: Path) -> None:
     json_path = summary_dir / f"{phase}_sweep_summary.json"
     csv_path = summary_dir / f"{phase}_sweep_summary.csv"
@@ -367,15 +394,132 @@ def aggregate_stats(summaries: List[Dict[str, Any]], param_name: str) -> Dict[st
     return stats
 
 
+def _extract_best_val_f1(raw_results: Dict[str, Any]) -> float | None:
+    """Best-effort extraction of best_val_metrics.f1_macro (or close variants)."""
+    candidates = [
+        ("best_val_metrics", "f1_macro"),
+        ("best_val_metrics", "macro_f1"),
+        ("best_metrics", "val_f1_macro"),
+        ("val", "best_f1_macro"),
+        ("metrics", "best_val_f1_macro"),
+    ]
+    for path in candidates:
+        node: Any = raw_results
+        for key in path:
+            if not isinstance(node, dict) or key not in node:
+                node = None
+                break
+            node = node[key]
+        if isinstance(node, (int, float)):
+            return float(node)
+    return None
+
+
+def log_run_summary_line(summary: Dict[str, Any]) -> None:
+    """Print a concise line with key metrics for the completed run."""
+    best_val_f1 = _extract_best_val_f1(summary.get("raw_results", {}))
+    metric_label: str
+    metric_value: Any
+    if best_val_f1 is not None:
+        metric_label = "best_val_metrics.f1_macro"
+        metric_value = best_val_f1
+    elif summary.get("metric_value") is not None:
+        metric_label = summary.get("metric_key_used") or "metric_value"
+        metric_value = summary["metric_value"]
+    else:
+        metric_label = "metric_value"
+        metric_value = "N/A"
+
+    metric_str = f"{metric_value:.4f}" if isinstance(metric_value, (int, float)) else metric_value
+    print(
+        "[RESULT] "
+        f"{summary['experiment_dir']} | {metric_label}={metric_str} | "
+        f"lr={summary['lr']} | wd={summary['weight_decay']} | seed={summary['seed']}"
+    )
+
+
+class _TeeStream(io.TextIOBase):
+    def __init__(self, stream, log_file):
+        self._stream = stream
+        self._log_file = log_file
+
+    def write(self, data):
+        self._stream.write(data)
+        self._stream.flush()
+        self._log_file.write(data)
+        self._log_file.flush()
+        return len(data)
+
+    def flush(self):
+        self._stream.flush()
+        self._log_file.flush()
+
+    def isatty(self):
+        return self._stream.isatty()
+
+    @property
+    def encoding(self):
+        return getattr(self._stream, "encoding", "utf-8")
+
+
+class TeeLogger:
+    """Mirror stdout/stderr to a log file in real-time."""
+
+    def __init__(self, log_path: Path):
+        self.log_path = log_path
+        self._log_file = None
+        self._original_stdout = None
+        self._original_stderr = None
+
+    def __enter__(self):
+        self.log_path.parent.mkdir(parents=True, exist_ok=True)
+        self._log_file = open(self.log_path, "a", encoding="utf-8")
+        self._original_stdout = sys.stdout
+        self._original_stderr = sys.stderr
+        sys.stdout = _TeeStream(self._original_stdout, self._log_file)
+        sys.stderr = _TeeStream(self._original_stderr, self._log_file)
+        print(f"[LOGGER] Mirroring console output to {self.log_path}")
+        return self
+
+    def __exit__(self, exc_type, exc, exc_tb):
+        sys.stdout = self._original_stdout
+        sys.stderr = self._original_stderr
+        if self._log_file:
+            self._log_file.flush()
+            self._log_file.close()
+
+
 # ---------------------------------------------------------------------------
 # Main grid search logic
 # ---------------------------------------------------------------------------
 
-def run_grid_search(seeds: List[int], skip_completed: bool, force_rerun: bool, dry_run: bool, quick_test: bool, lr_values: List[float], wd_values: List[float], summary_dir: Path) -> None:
+def run_grid_search(
+    seeds: List[int],
+    skip_completed: bool,
+    force_rerun: bool,
+    dry_run: bool,
+    quick_test: bool,
+    lr_values: List[float],
+    wd_values: List[float],
+    summary_dir: Path,
+    shuffle_seed: int,
+) -> None:
     """Full grid search: all LR × WD combinations."""
     summaries: List[Dict[str, Any]] = []
     existing_summaries = load_existing_summaries(summary_dir, phase="grid")
-    total_runs = len(lr_values) * len(wd_values) * len(seeds)
+    combos: List[Dict[str, Any]] = []
+    for lr in lr_values:
+        for wd in wd_values:
+            for seed in seeds:
+                combos.append(
+                    {
+                        "lr": lr,
+                        "weight_decay": wd,
+                        "seed": seed,
+                        "name": f"grid_lr{lr}_wd{wd}_s{seed}",
+                    }
+                )
+    total_runs = len(combos)
     
     print("\n" + "="*70)
     print("GRID SEARCH CONFIGURATION")
@@ -390,53 +534,83 @@ def run_grid_search(seeds: List[int], skip_completed: bool, force_rerun: bool, d
     else:
         print(f"Estimated time: ~{total_runs * 1.5:.1f} hours (~{total_runs * 1.5 / 24:.1f} days)")
     print("="*70 + "\n")
-    
-    # Print execution order
-    print("EXECUTION ORDER:")
+    print("COMBINATION CATALOG (sorted):")
+    print("These are all the combinations that will be executed in this sweep. Note that the actual execution order may be randomized (see below).")
+    print("-" * 70)
+    for idx, combo in enumerate(combos, start=1):
+        print(
+            f"{idx:3d}. {combo['name']:<40} "
+            f"(lr={combo['lr']}, wd={combo['weight_decay']}, seed={combo['seed']})"
+        )
+    print("="*70 + "\n")
+
+    rng = random.Random(shuffle_seed)
+    execution_order = combos.copy()
+    rng.shuffle(execution_order)
+
+    print(f"EXECUTION ORDER (shuffle seed={shuffle_seed}):")
+    print("These are all the combinations that will be executed in this sweep in randomized order.")
     print("-" * 70)
     if existing_summaries:
-        print(f"[INFO] Found {len(existing_summaries)} existing summaries in {summary_dir} that will be preserved.")
-
-    run_count = 0
-    for lr in lr_values:
-        for wd in wd_values:
-            for seed in seeds:
-                run_count += 1
-                exp_name = f"grid_lr{lr}_wd{wd}_s{seed}"
-                print(f"{run_count:3d}. {exp_name:<40} (lr={lr}, wd={wd}, seed={seed})")
+        print(
+            f"[INFO] Found {len(existing_summaries)} existing summaries in {summary_dir} that will be preserved."
+        )
+    for idx, combo in enumerate(execution_order, start=1):
+        print(
+            f"{idx:3d}. {combo['name']:<40} "
+            f"(lr={combo['lr']}, wd={combo['weight_decay']}, seed={combo['seed']})"
+        )
     print("="*70 + "\n")
     
     if dry_run:
         print("[DRY-RUN MODE] Preview of runs:\n")
         return
     
-    run_count = 0
-    for lr in lr_values:
-        for wd in wd_values:
-            for seed in seeds:
-                run_count += 1
-                exp_name = f"grid_lr{lr}_wd{wd}_s{seed}"
-                print(f"\n[Progress: {run_count}/{total_runs}] Starting {exp_name}")
-                run_dir = run_training(exp_name, lr=lr, wd=wd, seed=seed, skip_completed=skip_completed, force_rerun=force_rerun, dry_run=dry_run, quick_test=quick_test)
-                
-                if run_dir is None:
-                    print(f"[WARN] Skipping summary for failed run: {exp_name}")
-                    continue
-                
-                summaries.append(summarize_run(run_dir, lr=lr, wd=wd, seed=seed, phase="grid"))
+    for run_count, combo in enumerate(execution_order, start=1):
+        exp_name = combo["name"]
+        lr = combo["lr"]
+        wd = combo["weight_decay"]
+        seed = combo["seed"]
+        print(f"\n[Progress: {run_count}/{total_runs}] Starting {exp_name}")
+        run_dir = run_training(
+            exp_name,
+            lr=lr,
+            wd=wd,
+            seed=seed,
+            skip_completed=skip_completed,
+            force_rerun=force_rerun,
+            dry_run=dry_run,
+            quick_test=quick_test,
+        )
+
+        if run_dir is None:
+            print(f"[WARN] Skipping summary for failed run: {exp_name}")
+            continue
+
+        summary_record = summarize_run(run_dir, lr=lr, wd=wd, seed=seed, phase="grid")
+        summaries.append(summary_record)
+        log_run_summary_line(summary_record)
     
     all_summaries = merge_summaries(existing_summaries, summaries)
-    write_aggregate(all_summaries, phase="grid", lr_values=lr_values, wd_values=wd_values, seeds=seeds, summary_dir=summary_dir)
+    ordered_summaries = sort_summaries(all_summaries)
+    write_aggregate(
+        ordered_summaries,
+        phase="grid",
+        lr_values=lr_values,
+        wd_values=wd_values,
+        seeds=seeds,
+        summary_dir=summary_dir,
+    )
     
     # Stats by LR
-    lr_stats = aggregate_stats(all_summaries, param_name="lr")
+    lr_stats = aggregate_stats(ordered_summaries, param_name="lr")
     lr_stats_path = summary_dir / "grid_lr_stats.json"
     with open(lr_stats_path, "w") as f:
         json.dump(lr_stats, f, indent=2)
     print(f"[SAVE] Per-LR stats: {lr_stats_path}")
     
     # Stats by WD
-    wd_stats = aggregate_stats(all_summaries, param_name="weight_decay")
+    wd_stats = aggregate_stats(ordered_summaries, param_name="weight_decay")
     wd_stats_path = summary_dir / "grid_wd_stats.json"
     with open(wd_stats_path, "w") as f:
         json.dump(wd_stats, f, indent=2)
@@ -457,6 +631,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--dry-run", action="store_true", help="Preview without executing")
     p.add_argument("--quick-test", action="store_true", help="Fast test mode: 2 epochs, 1 LR, 1 WD, 1 seed (~30 seconds)")
     p.add_argument("--new-summary-dir", action="store_true", help="Force creation of a new summary directory instead of reusing the latest one")
+    p.add_argument("--shuffle-seed", type=int, default=DEFAULT_SHUFFLE_SEED, help="Seed controlling execution order randomization")
     return p.parse_args()
 
 
@@ -464,44 +639,59 @@ def main():
     args = parse_args()
     
     # Quick test mode: minimal configuration
+    quick_test_banner = None
     if args.quick_test:
         seeds = [42]  # Just 1 seed
         lr_values = [0.001]  # Just 1 learning rate
         wd_values = [1e-4]   # Just 1 weight decay
-        print("\n⚡ QUICK TEST MODE ENABLED")
-        print("   - 1 learning rate, 1 weight decay, 1 seed = 1 run")
-        print("   - 2 epochs per run")
-        print("   - Expected duration: ~30 seconds\n")
+        quick_test_banner = (
+            "\n⚡ QUICK TEST MODE ENABLED\n"
+            "   - 1 learning rate, 1 weight decay, 1 seed = 1 run\n"
+            "   - 2 epochs per run\n"
+            "   - Expected duration: ~30 seconds\n"
+        )
     else:
         seeds = args.seeds if args.seeds else DEFAULT_SEEDS
         lr_values = LR_VALUES
         wd_values = WD_VALUES
     
-    summary_dir = create_summary_dir(
+    summary_dir, reused_existing = create_summary_dir(
         lr_values,
         wd_values,
         seeds,
         tag="quick-test" if args.quick_test else None,
-        reuse_existing=not args.new_summary_dir
+        reuse_existing=not args.new_summary_dir,
+        announce=False
     )
-    print(f"Summaries will be stored in: {summary_dir}\n")
-    
-    run_grid_search(
-        seeds=seeds,
-        skip_completed=args.skip_completed,
-        force_rerun=args.force_rerun,
-        dry_run=args.dry_run,
-        quick_test=args.quick_test,
-        lr_values=lr_values,
-        wd_values=wd_values,
-        summary_dir=summary_dir
-    )
+    log_path = summary_dir / DEFAULT_LOG_FILENAME
 
-    print("\n" + "="*70)
-    print("SWEEP COMPLETED")
-    print("="*70)
-    print(f"Results saved to: {summary_dir}")
-    print("="*70)
+    with TeeLogger(log_path):
+        if reused_existing:
+            print(f"[INFO] Reusing summary directory: {summary_dir}")
+        else:
+            print(f"[INFO] Created new summary directory: {summary_dir}")
+        print(f"Summaries will be stored in: {summary_dir}\n")
+
+        if quick_test_banner:
+            print(quick_test_banner)
+        
+        run_grid_search(
+            seeds=seeds,
+            skip_completed=args.skip_completed,
+            force_rerun=args.force_rerun,
+            dry_run=args.dry_run,
+            quick_test=args.quick_test,
+            lr_values=lr_values,
+            wd_values=wd_values,
+            summary_dir=summary_dir,
+            shuffle_seed=args.shuffle_seed,
+        )
+
+        print("\n" + "="*70)
+        print("SWEEP COMPLETED")
+        print("="*70)
+        print(f"Results saved to: {summary_dir}")
+        print("="*70)
 
 
 if __name__ == "__main__":
