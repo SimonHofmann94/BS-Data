@@ -9,11 +9,17 @@ Usage:
     # Custom seeds
     python code/experiments/run_hparam_sweep.py --seeds 42 43 44
 
-    # Resume after interruption
-    python code/experiments/run_hparam_sweep.py --skip-completed
+    # Resume after interruption (default behavior)
+    python code/experiments/run_hparam_sweep.py
+
+    # Force all runs to re-execute
+    python code/experiments/run_hparam_sweep.py --no-skip
 
     # Preview without running
     python code/experiments/run_hparam_sweep.py --dry-run
+
+    # Force a fresh summary directory instead of reusing the last one
+    python code/experiments/run_hparam_sweep.py --new-summary-dir
 
 Results saved under: code/experiments/results/hparam_summaries/<timestamped_sweep>/
 """
@@ -64,9 +70,7 @@ def _format_param_block(name: str, values: List[Any]) -> str:
     return _slugify(f"{name}_{str_values}")
 
 
-def create_summary_dir(lr_values: List[float], wd_values: List[float], seeds: List[int], *, tag: str | None = None) -> Path:
-    """Create a unique summary directory for the current sweep configuration."""
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+def _build_summary_descriptor(lr_values: List[float], wd_values: List[float], seeds: List[int], tag: str | None) -> str:
     parts = [
         _format_param_block("lr", lr_values),
         _format_param_block("wd", wd_values),
@@ -74,9 +78,39 @@ def create_summary_dir(lr_values: List[float], wd_values: List[float], seeds: Li
     ]
     if tag:
         parts.append(_slugify(tag))
-    descriptor = "__".join(parts)
+    return "__".join(parts)
+
+
+def _find_existing_summary_dir(descriptor: str) -> Path | None:
+    if not SUMMARY_ROOT.exists():
+        return None
+    suffix = f"__{descriptor}"
+    candidates = [d for d in SUMMARY_ROOT.iterdir() if d.is_dir() and d.name.endswith(suffix)]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda d: d.stat().st_ctime)
+
+
+def create_summary_dir(
+    lr_values: List[float],
+    wd_values: List[float],
+    seeds: List[int],
+    *,
+    tag: str | None = None,
+    reuse_existing: bool = True
+) -> Path:
+    """Create (or reuse) a summary directory for the current sweep configuration."""
+    descriptor = _build_summary_descriptor(lr_values, wd_values, seeds, tag)
+    if reuse_existing:
+        existing = _find_existing_summary_dir(descriptor)
+        if existing:
+            print(f"[INFO] Reusing summary directory: {existing}")
+            return existing
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     summary_dir = SUMMARY_ROOT / f"sweep_{timestamp}__{descriptor}"
     summary_dir.mkdir(parents=True, exist_ok=True)
+    print(f"[INFO] Created new summary directory: {summary_dir}")
     return summary_dir
 
 # ---------------------------------------------------------------------------
@@ -238,6 +272,36 @@ def summarize_run(run_dir: Path, lr: float, wd: float, seed: int, phase: str) ->
     }
 
 
+def load_existing_summaries(summary_dir: Path, phase: str) -> List[Dict[str, Any]]:
+    summary_path = summary_dir / f"{phase}_sweep_summary.json"
+    if not summary_path.exists():
+        return []
+    try:
+        with open(summary_path, "r") as f:
+            data = json.load(f)
+        if isinstance(data, list):
+            return data
+        print(f"[WARN] Unexpected data format in {summary_path}; expected list, got {type(data)}")
+    except Exception as e:
+        print(f"[WARN] Failed to read existing summary file {summary_path}: {e}")
+    return []
+
+
+def _summary_key(entry: Dict[str, Any]) -> str:
+    return "|".join(
+        str(entry.get(field)) for field in ("phase", "lr", "weight_decay", "seed")
+    )
+
+
+def merge_summaries(existing: List[Dict[str, Any]], new: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    merged: Dict[str, Dict[str, Any]] = {}
+    for record in existing:
+        merged[_summary_key(record)] = record
+    for record in new:
+        merged[_summary_key(record)] = record
+    return list(merged.values())
+
+
 def write_aggregate(summaries: List[Dict[str, Any]], phase: str, lr_values: List[float], wd_values: List[float], seeds: List[int], summary_dir: Path) -> None:
     json_path = summary_dir / f"{phase}_sweep_summary.json"
     csv_path = summary_dir / f"{phase}_sweep_summary.csv"
@@ -310,6 +374,7 @@ def aggregate_stats(summaries: List[Dict[str, Any]], param_name: str) -> Dict[st
 def run_grid_search(seeds: List[int], skip_completed: bool, force_rerun: bool, dry_run: bool, quick_test: bool, lr_values: List[float], wd_values: List[float], summary_dir: Path) -> None:
     """Full grid search: all LR × WD combinations."""
     summaries: List[Dict[str, Any]] = []
+    existing_summaries = load_existing_summaries(summary_dir, phase="grid")
     total_runs = len(lr_values) * len(wd_values) * len(seeds)
     
     print("\n" + "="*70)
@@ -329,6 +394,9 @@ def run_grid_search(seeds: List[int], skip_completed: bool, force_rerun: bool, d
     # Print execution order
     print("EXECUTION ORDER:")
     print("-" * 70)
+    if existing_summaries:
+        print(f"[INFO] Found {len(existing_summaries)} existing summaries in {summary_dir} that will be preserved.")
+
     run_count = 0
     for lr in lr_values:
         for wd in wd_values:
@@ -357,17 +425,18 @@ def run_grid_search(seeds: List[int], skip_completed: bool, force_rerun: bool, d
                 
                 summaries.append(summarize_run(run_dir, lr=lr, wd=wd, seed=seed, phase="grid"))
     
-    write_aggregate(summaries, phase="grid", lr_values=lr_values, wd_values=wd_values, seeds=seeds, summary_dir=summary_dir)
+    all_summaries = merge_summaries(existing_summaries, summaries)
+    write_aggregate(all_summaries, phase="grid", lr_values=lr_values, wd_values=wd_values, seeds=seeds, summary_dir=summary_dir)
     
     # Stats by LR
-    lr_stats = aggregate_stats(summaries, param_name="lr")
+    lr_stats = aggregate_stats(all_summaries, param_name="lr")
     lr_stats_path = summary_dir / "grid_lr_stats.json"
     with open(lr_stats_path, "w") as f:
         json.dump(lr_stats, f, indent=2)
     print(f"[SAVE] Per-LR stats: {lr_stats_path}")
     
     # Stats by WD
-    wd_stats = aggregate_stats(summaries, param_name="weight_decay")
+    wd_stats = aggregate_stats(all_summaries, param_name="weight_decay")
     wd_stats_path = summary_dir / "grid_wd_stats.json"
     with open(wd_stats_path, "w") as f:
         json.dump(wd_stats, f, indent=2)
@@ -381,10 +450,13 @@ def run_grid_search(seeds: List[int], skip_completed: bool, force_rerun: bool, d
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Grid search for learning rate and weight decay.")
     p.add_argument("--seeds", type=int, nargs="*", default=None, help="List of seeds (default: 5 preset seeds)")
-    p.add_argument("--skip-completed", action="store_true", help="Skip runs with existing results.json")
+    p.set_defaults(skip_completed=True)
+    p.add_argument("--skip-completed", dest="skip_completed", action="store_true", help="Skip runs with existing results.json (default)")
+    p.add_argument("--no-skip", dest="skip_completed", action="store_false", help="Re-run every configuration even if results exist")
     p.add_argument("--force-rerun", action="store_true", help="Re-run even if results exist")
     p.add_argument("--dry-run", action="store_true", help="Preview without executing")
     p.add_argument("--quick-test", action="store_true", help="Fast test mode: 2 epochs, 1 LR, 1 WD, 1 seed (~30 seconds)")
+    p.add_argument("--new-summary-dir", action="store_true", help="Force creation of a new summary directory instead of reusing the latest one")
     return p.parse_args()
 
 
@@ -405,7 +477,13 @@ def main():
         lr_values = LR_VALUES
         wd_values = WD_VALUES
     
-    summary_dir = create_summary_dir(lr_values, wd_values, seeds, tag="quick-test" if args.quick_test else None)
+    summary_dir = create_summary_dir(
+        lr_values,
+        wd_values,
+        seeds,
+        tag="quick-test" if args.quick_test else None,
+        reuse_existing=not args.new_summary_dir
+    )
     print(f"Summaries will be stored in: {summary_dir}\n")
     
     run_grid_search(
