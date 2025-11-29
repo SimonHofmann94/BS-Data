@@ -489,7 +489,8 @@ def main(cfg: DictConfig) -> None:
         class_names=cfg.data.class_names,
         config=config_dict,  # Pass config for saving
         split_info=split_info,  # Pass split statistics
-        experiment_dir=experiment_dir
+        experiment_dir=experiment_dir,
+        save_checkpoints=cfg.training.get("save_checkpoints", True)
     )
     
     # Train

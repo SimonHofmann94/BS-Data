@@ -59,6 +59,7 @@ training:
   early_stopping_metric: "f1_macro"
   log_interval: 5  # More frequent logging to see progress
   threshold: 0.5
+  save_checkpoints: false  # Disable checkpoint artifacts to save disk space
   
   # Optional: freeze backbone for transfer learning
   freeze_backbone: true  # Freeze pretrained weights - only train classifier

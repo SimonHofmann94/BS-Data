@@ -46,6 +46,7 @@ class Trainer:
         scheduler: Learning rate scheduler
         device: torch device
         class_names: Names of classes for logging
+        save_checkpoints: Whether to persist checkpoints and final model
     """
     
     def __init__(
@@ -62,6 +63,7 @@ class Trainer:
         config: Optional[Dict[str, Any]] = None,
         split_info: Optional[Dict[str, Any]] = None,
         experiment_dir: Optional[Path] = None,
+        save_checkpoints: bool = True,
     ):
         self.model = model
         self.loss_fn = loss_fn
@@ -82,15 +84,19 @@ class Trainer:
         self.class_names = class_names or [f"class_{i}" for i in range(4)]
         self.config = config  # Store config for later saving
         self.split_info = split_info  # Store split statistics
+        self.save_checkpoints = save_checkpoints
         
         # Setup experiment directory (defaults to current working directory when not provided)
         self.experiment_dir = Path(experiment_dir) if experiment_dir else Path.cwd()
         self.experiment_dir.mkdir(parents=True, exist_ok=True)
         self.experiment_name = self.experiment_dir.name
         
-        # Checkpoint directory
-        self.checkpoint_dir = self.experiment_dir / "checkpoints"
-        self.checkpoint_dir.mkdir(exist_ok=True)
+        # Checkpoint directory (optional)
+        if self.save_checkpoints:
+            self.checkpoint_dir = self.experiment_dir / "checkpoints"
+            self.checkpoint_dir.mkdir(exist_ok=True)
+        else:
+            self.checkpoint_dir = None
         
         # Move model to device
         self.model.to(self.device)
@@ -164,8 +170,8 @@ class Trainer:
         early_stopping = EarlyStoppingCallback(
             patience=early_stopping_patience,
             metric_name="val_f1_macro",
-            save_best_only=True,
-            checkpoint_dir=str(self.checkpoint_dir),
+            save_best_only=self.save_checkpoints,
+            checkpoint_dir=str(self.checkpoint_dir) if self.save_checkpoints else None,
             mode="max"
         )
         
@@ -488,10 +494,13 @@ class Trainer:
         
         logger.info(f"Results saved to {results_file}")
         
-        # Save model checkpoint
-        model_file = self.experiment_dir / "model_final.pt"
-        torch.save(self.model.state_dict(), model_file)
-        logger.info(f"Model saved to {model_file}")
+        # Save model checkpoint unless disabled
+        if self.save_checkpoints:
+            model_file = self.experiment_dir / "model_final.pt"
+            torch.save(self.model.state_dict(), model_file)
+            logger.info(f"Model saved to {model_file}")
+        else:
+            logger.info("Skipping final model checkpoint (save_checkpoints=False)")
 
 
 if __name__ == "__main__":
