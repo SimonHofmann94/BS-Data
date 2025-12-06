@@ -496,7 +496,6 @@ def main(cfg: DictConfig) -> None:
     # Train
     results = trainer.train(
         num_epochs=cfg.training.num_epochs,
-        early_stopping_patience=cfg.training.early_stopping_patience,
         warmup_epochs=cfg.training.warmup_epochs,
         log_interval=cfg.training.log_interval,
         threshold=cfg.training.threshold

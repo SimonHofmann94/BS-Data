@@ -51,12 +51,10 @@ augmentation:
 
 # Training configuration
 training:
-  num_epochs: 50  # Reduced from 100 - balanced dataset converges faster
+  num_epochs: 15  # Reduced from 100 - balanced dataset converges faster
   learning_rate: 0.001
   weight_decay: 0.001  # Increased from 0.0001 - stronger L2 regularization
   warmup_epochs: 2  # Reduced from 3 - faster warmup
-  early_stopping_patience: 5  # Reduced from 8 - stop earlier
-  early_stopping_metric: "f1_macro"
   log_interval: 5  # More frequent logging to see progress
   threshold: 0.5
   save_checkpoints: false  # Disable checkpoint artifacts to save disk space

@@ -13,13 +13,11 @@ from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR
 import numpy as np
 import logging
 import json
-import os
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, Any, Tuple, Optional, List
 
-from .metrics import compute_metrics, get_predictions_from_logits, find_optimal_thresholds, log_per_class_metrics
-from .callbacks import EarlyStoppingCallback
+from .metrics import compute_metrics, log_per_class_metrics
 
 logger = logging.getLogger(__name__)
 
@@ -124,7 +122,6 @@ class Trainer:
     def train(
         self,
         num_epochs: int = 50,
-        early_stopping_patience: int = 15,
         warmup_epochs: int = 5,
         log_interval: int = 10,
         threshold: float = 0.5
@@ -134,7 +131,6 @@ class Trainer:
         
         Args:
             num_epochs: Total epochs to train
-            early_stopping_patience: Patience for early stopping
             warmup_epochs: Linear warmup epochs
             log_interval: Log metrics every N batches
             threshold: Classification threshold for evaluation
@@ -144,7 +140,7 @@ class Trainer:
         """
         
         logger.info(f"Starting training for {num_epochs} epochs...")
-        logger.info(f"Warmup: {warmup_epochs}, Early stopping patience: {early_stopping_patience}")
+        logger.info(f"Warmup epochs: {warmup_epochs}")
         
         # Setup learning rate scheduler with warmup
         if self.scheduler is None:
@@ -165,15 +161,6 @@ class Trainer:
             )
         else:
             scheduler = self.scheduler
-        
-        # Early stopping
-        early_stopping = EarlyStoppingCallback(
-            patience=early_stopping_patience,
-            metric_name="val_f1_macro",
-            save_best_only=self.save_checkpoints,
-            checkpoint_dir=str(self.checkpoint_dir) if self.save_checkpoints else None,
-            mode="max"
-        )
         
         # Training loop
         for epoch in range(num_epochs):
@@ -205,20 +192,14 @@ class Trainer:
             # Log metrics
             self._log_epoch_metrics(epoch + 1, train_loss, val_loss, val_metrics)
             
-            # Early stopping
-            should_stop = early_stopping(
-                current_metric=val_metrics["f1_macro"],
-                epoch=epoch + 1,
-                model=self.model
-            )
+            # Track best epoch purely for reporting purposes
+            if val_metrics["f1_macro"] > self.best_val_metric:
+                self.best_val_metric = val_metrics["f1_macro"]
+                self.best_epoch = epoch + 1
             
             # Learning rate step
             if scheduler is not None:
                 scheduler.step()
-            
-            if should_stop:
-                logger.info(f"\nEarly stopping at epoch {epoch + 1}")
-                break
         
         logger.info("\n" + "="*60)
         logger.info("Training completed!")
@@ -236,7 +217,8 @@ class Trainer:
         self.metrics_history["test_metrics"] = [test_metrics]
         
         # Save results (including learned thresholds)
-        results = self._compile_results(early_stopping.best_epoch)
+        final_epoch = self.train_history["epoch"][-1] if self.train_history["epoch"] else 0
+        results = self._compile_results(self.best_epoch or final_epoch)
         self._save_results(results)
         
         return results

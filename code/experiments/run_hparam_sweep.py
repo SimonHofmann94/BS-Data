@@ -43,7 +43,7 @@ import re
 # ---------------------------------------------------------------------------
 LR_VALUES = [0.001, 0.005, 0.01] # values of learning rates to try
 WD_VALUES = [0.001, 0.01, 0.1] # values of weight decay to try
-# DEFAULT_SEEDS = [42, 43, 44, 45, 46] # number of repetitions for each combination of parameters
+DEFAULT_SEEDS = [10,20,30,40,50,60,70,80,90,100,110,120,130,140,150] # number of repetitions for each combination of parameters
 # DEFAULT_SEEDS = [47, 48, 49, 50, 51] # number of repetitions for each combination of parameters
 # DEFAULT_SEEDS = [52, 53, 54, 55, 56] # number of repetitions for each combination of parameters
 
@@ -196,7 +196,6 @@ def run_training(experiment_name: str, lr: float, wd: float, seed: int, *, skip_
         command.extend([
             "training.num_epochs=2",
             "data.batch_size=32",
-            "training.early_stopping_patience=1"
         ])
 
     if dry_run:
